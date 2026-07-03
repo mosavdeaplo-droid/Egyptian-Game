@@ -1,0 +1,32 @@
+التقطت الصورة، الخطأ ده مش نابع من كود المشروع نفسه ولا من الكود اللي فحصته قبل كده — هو مشكلة في إعدادات الـ build على Railway (Nixpacks). هفهمك السبب بالظبط.
+السبب
+railway.json عندك فيه:
+json"buildCommand": "corepack enable && pnpm install && ..."
+المشكلة إن الأمر ده بيتحط في مرحلة الـ "build" بس. لكن Nixpacks عنده مرحلة تلقائية اسمها "install" بتتنفذ قبل الـ buildCommand بتاعك، وهي اللي بتشغّل pnpm i --frozen-lockfile لوحدها بنسخة pnpm افتراضية (مش بالضرورة نفس النسخة 10.26.1 المحددة في packageManager عندك في package.json)، لأن الـ corepack enable بتاعك لسه ما اتشغلش في المرحلة دي.
+النتيجة: pnpm بتاع Nixpacks بيحاول يعمل frozen install بنسخة/config مختلف عن اللي اتسجل جوه pnpm-lock.yaml، فبيطلع ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+(فحصت الليست فايل نفسه محليًا بـ pnpm install --frozen-lockfile واشتغل تمام من غير مشاكل — يعني الليست فايل نفسه سليم، المشكلة بس في ترتيب تنفيذ الأوامر على Railway.)
+الحل
+ضيف ملف nixpacks.toml في روت المشروع (جنب railway.json) يجبر مرحلة الـ install تستخدم corepack الأول:
+toml[phases.install]
+cmds = [
+  "corepack enable",
+  "corepack prepare pnpm@10.26.1 --activate",
+  "pnpm install --frozen-lockfile"
+]
+وبعدين تقدر تبسّط railway.json بحيث الـ buildCommand يبقى بس الخطوات اللي بعد الـ install:
+json{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "pnpm --filter @workspace/api-spec run codegen && pnpm run typecheck:libs && pnpm --filter @workspace/api-server run build"
+  },
+  "deploy": {
+    "startCommand": "pnpm --filter @workspace/api-server run start",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
+}
+حل بديل أسرع (من غير ملف جديد)
+لو عايز تجرب بسرعة قبل ما تعمل commit، تقدر تضيف Variable في إعدادات Railway نفسها (Variables tab):
+NIXPACKS_INSTALL_CMD=corepack enable && corepack prepare pnpm@10.26.1 --activate && pnpm install --frozen-lockfile
+ده بيغيّر مرحلة الـ install مباشرة من غير ما تلمس الكود، وتقدر تحوّله لملف nixpacks.toml بعدين لما تتأكد إنه اشتغل.
